@@ -46,6 +46,7 @@ import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import { botGroupExecutionFailureBatches } from '@cindy/maker-shared/botGroupPresentation';
+import { BOT_GROUP_MENTION_LIMIT, resolveBotGroupMessageMentions } from '@cindy/maker-shared/botGroupMentions';
 import { createThreadProjection, isShareableThreadReply, threadPreviewAttachments, threadPreviewText } from './chatServerThreads.js';
 import { companionSnapshot, registerCompanionHomes } from '../companion-cloud/homes.js';
 import { startCompanionCloud, type CompanionCloudRuntime } from '../companion-cloud/runtime.js';
@@ -367,6 +368,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   let groupDiscussionParity = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
   let singleSpeaker = false;
+  /** Result mentions: the server takes `mentions` on a completed turn and queues the named teammates. */
+  let groupReplyMentions = false;
   const pendingPlanCancels = new Map<string, Map<string, boolean>>();
   async function cancelPlanning(roomId: string, sourceId: string, failed = false) {
     if (!groupDiscussionParity) return;
@@ -738,11 +741,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     refreshActors = (async () => {
       actorsStale = false;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
-      const me = await api<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await api<{ actor: Actor; deviceId?: string | null; capabilities?: { groupDiscussionParity?: number; groupSingleSpeaker?: number; groupReplyMentions?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsDissolve = me.capabilities?.groupLifecycleVersion === 1;
       supportsListRemoval = me.capabilities?.conversationListStateVersion === 1;
       groupDiscussionParity = me.capabilities?.groupDiscussionParity === 1;
       singleSpeaker = me.capabilities?.groupSingleSpeaker === 1;
+      groupReplyMentions = me.capabilities?.groupReplyMentions === 1;
       selfDeviceId = typeof me.deviceId === 'string' && me.deviceId ? me.deviceId : null;
       companionHome = !!deps.companionCloud && me.capabilities?.companionHome === true && !!selfDeviceId;
       // Work in a 1:1 room is only claimed by a copy that hands it to the companion's main task;
@@ -1448,6 +1452,30 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     await deliverSettlement(run);
   }
+  /**
+   * The teammates a companion's reply names. Its text is the only source: a completed
+   * turn carries no picked list. Only a server announcing `groupReplyMentions` accepts
+   * the field (an older strict contract refuses the whole result instead), and only an
+   * ordinary main-group reply may hand work on — plan steps and queue turns stay
+   * server-ordered. Unknown, departed or non-Bot names are dropped, never thrown: a
+   * stale name may lose its own mention, but never the reply itself.
+   */
+  async function replyMentionIds(run: Running, text: string): Promise<string[]> {
+    if (!groupReplyMentions || !text.includes('@')) return [];
+    if (run.plan || run.context?.kind !== 'message' || run.execution.trigger_type) return [];
+    let members: Member[];
+    try { members = await api<Member[]>(`/conversations/${run.execution.conversation_id}/members`); }
+    catch (error) {
+      deps.log?.warn('Chat reply mentions unavailable', { groupId: run.execution.conversation_id, ...chatErrorDiagnostic(error) });
+      return [];
+    }
+    const candidates = members
+      .filter(member => member.state === 'joined' && member.kind === 'bot' && member.id !== run.execution.bot_id)
+      .map(member => ({ botId: member.id, name: member.name, displayName: memberName(member), nickname: member.nickname }));
+    const resolved = resolveBotGroupMessageMentions(text, { members: candidates, excludeBotIds: [run.execution.bot_id] });
+    const ids = resolved.all ? [...candidates.map(member => member.botId), ...resolved.botIds] : resolved.botIds;
+    return [...new Set(ids)].slice(0, BOT_GROUP_MENTION_LIMIT);
+  }
   function deliverSettlement(run: Running): Promise<void> {
     if (run.delivery) return run.delivery;
     const pending = run.settlement;
@@ -1500,8 +1528,11 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             failureCodes.set(`${run.execution.id}:${run.execution.epoch}`, terminal.failureCode ?? 'RUNTIME_ERROR');
             if (failureCodes.size > 1000) failureCodes.delete(failureCodes.keys().next().value!);
           }
+          const replyMentions = terminal.outcome === 'error' || isBotGroupNoReplyText(text) || !contentText.trim()
+            ? [] : await replyMentionIds(run, contentText);
           pending.payload = terminal.outcome === 'error' ? { detail: botGroupRuntimeFailureDetail(terminal.failureCode ?? 'RUNTIME_ERROR') }
-            : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : { content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files] }),
+            : { ...(isBotGroupNoReplyText(text) && !files.length ? {} : { content: [{ type: 'text', text: contentText.slice(0, 16000) || '已完成' }, ...files],
+                ...(replyMentions.length ? { mentions: replyMentions } : {}) }),
               // A single-speaker server never chains rounds, so there is nothing to continue.
               ...(singleSpeaker ? {} : { continueDiscussion: run.context?.kind !== 'member.joined' && !run.plan && !isBotGroupNoReplyText(text) }) };
         }
@@ -1516,6 +1547,16 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             botName: step.botName, task: step.task, outcome: pending.terminal.outcome === 'error' ? 'failed' : 'done', planDone: latest?.status === 'done' }, scope);
         }
       } catch (error) {
+        // A target that left between our member read and the completion costs only its
+        // own mention, never the reply: resubmit the same immutable result without
+        // recipients. A server that filters instead never reaches this path.
+        if (chatErrorDiagnostic(error).code === 'MENTION_NOT_MEMBER' && pending.payload && Array.isArray(pending.payload.mentions)) {
+          const rest = { ...pending.payload };
+          delete rest.mentions;
+          pending.payload = rest;
+          pending.retryAt = 0;
+          return;
+        }
         // Keep the result during transport/temporary service failures. A definitive
         // rejection (including revoked/expired leases) must never rerun the Agent
         // or post the private result under a new execution identity.

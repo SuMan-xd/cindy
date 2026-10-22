@@ -535,6 +535,45 @@ describe('Chat Server result delivery and refresh', () => {
     if (resultText === 'Hello') expect(deliveries()[0][2].content).toEqual([{ type: 'text', text: 'Hello' }]);
     else expect(deliveries()[0][2]).not.toHaveProperty('content');
   });
+  const friendId = '20000000-0000-4000-8000-000000000002';
+  const departedId = '20000000-0000-4000-8000-000000000003';
+  const replyMembers = [
+    { id: botId, kind: 'bot', name: 'Bot', ownerName: 'Me', ownerActorId: selfId, state: 'joined', role: 'member' },
+    { id: friendId, kind: 'bot', name: '小满', ownerName: 'Chris', ownerActorId: 'foreign-owner', state: 'joined', role: 'member' },
+    { id: departedId, kind: 'bot', name: '阿布', ownerName: 'Ada', ownerActorId: 'foreign-owner', state: 'left', role: 'member' },
+  ];
+  it('sends the teammates an ordinary reply names only to a server that accepts result mentions', async () => {
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { groupReplyMentions: 1 } } }
+      : route === `/conversations/${roomId}/members` ? { body: replyMembers } : response(route));
+    await start();
+    // A departed member and the author's own name never become recipients; an unknown
+    // name is dropped silently, so the reply itself is still delivered.
+    await service.settleLaneTurn({ ...terminal, resultText: '@小满 @阿布 @Bot @无名 你们看' });
+    expect(deliveries()[0][2]).toMatchObject({ mentions: [friendId], content: [{ type: 'text', text: '@小满 @阿布 @Bot @无名 你们看' }] });
+  });
+  it('never sends a mention field to a server without the capability', async () => {
+    fixture.handle.mockImplementation(route => route === `/conversations/${roomId}/members`
+      ? { body: replyMembers } : response(route));
+    await start();
+    await service.settleLaneTurn({ ...terminal, resultText: '@小满 你接着看' });
+    expect(deliveries()[0][2]).not.toHaveProperty('mentions');
+  });
+  it('drops a refused mention instead of losing the reply', async () => {
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { groupReplyMentions: 1 } } };
+      if (route === `/conversations/${roomId}/members`) return { body: replyMembers };
+      if (body?.action === 'complete' && method === 'POST') return { status: 409, body: { error: { code: 'MENTION_NOT_MEMBER' } } };
+      return response(route);
+    });
+    await start();
+    await service.settleLaneTurn({ ...terminal, resultText: '@小满 你接着看' });
+    expect(deliveries()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(deliveries()).toHaveLength(2);
+    expect(deliveries()[1][2]).not.toHaveProperty('mentions');
+    expect(deliveries()[1][2].content).toEqual([{ type: 'text', text: '@小满 你接着看' }]);
+  });
   it.each([408, 429, 503])('reuses imported images after HTTP %s and completion ACK loss', async status => {
     replyImages.mockResolvedValueOnce({ text: 'Original image', attachments: [replyImage] }).mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
     fixture.upload.mockRejectedValueOnce(new ChatResponseError('TEMPORARY_UPLOAD', status)).mockResolvedValue([imageBlock]);

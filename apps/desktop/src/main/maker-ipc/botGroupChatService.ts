@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 import { and, asc, desc, eq, gt, inArray, lt, ne } from 'drizzle-orm';
+import { BOT_GROUP_EVERYONE_LABELS, resolveBotGroupMessageMentions } from '@cindy/maker-shared/botGroupMentions';
 
 import type { DataOwnerBroadcastScope } from '../device-link/broadcast-tap.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -423,56 +424,24 @@ function clampChars(text: string, max: number): string {
   return chars.length <= max ? text : `${chars.slice(0, max - 1).join('')}…`;
 }
 
-/** Every localized 「所有人」 label the composer can insert, plus common typed forms. */
-const EVERYONE_LABELS = ['所有人', '所有伙伴', '全員', '모두', 'everyone', 'all'];
-/** `@` right after these characters belongs to an e-mail or identifier, not a mention. */
-const WORD_BEFORE_AT = /[A-Za-z0-9._%+-]/;
-const LATIN_WORD_CHAR = /[A-Za-z0-9_]/;
-
-/**
- * CJK names are often followed directly by text (「@小满帮我查一下」); only a name ending
- * in a Latin letter or digit needs a word boundary. Mirrors the composer's parser
- * (renderer/features/bots/botGroupMentions.ts) so typed and picked mentions agree.
- */
-function endsAtBoundary(label: string, next: string | undefined): boolean {
-  if (next === undefined) return true;
-  const last = label[label.length - 1] ?? '';
-  return !(LATIN_WORD_CHAR.test(last) && LATIN_WORD_CHAR.test(next));
-}
-
 /**
  * Structured mentions from the composer are authoritative; typed `@name`
  * tokens are also honoured so a hand-written mention behaves the same way.
  * At each `@` the longest matching label wins, so 「@小满满」 never also means 小满.
+ * `excludeBotIds` drops targets that must never be named (a replying Bot itself).
  */
 export function resolveGroupMentions(
   text: string,
   input: BotGroupMention | null,
   members: ReadonlyArray<{ botId: string; name: string }>,
+  options: { excludeBotIds?: readonly string[] } = {},
 ): BotGroupMention {
-  const memberIds = new Set(members.map((member) => member.botId));
-  // The composer's list is authoritative: it keeps the picked Bot when names collide
-  // and is already in mention order, the speaking order the user asked for
-  // (docs/product-rules/bot-group-chat.md §4.1). Text is parsed only without it.
-  const structured = [...new Set((input?.botIds ?? []).filter((id) => memberIds.has(id)))];
-  const ordered: string[] = [];
-  let all = input?.all === true;
-  const labels = [
-    ...EVERYONE_LABELS.map((label) => ({ label, botId: null as string | null })),
-    ...members.filter((member) => member.name).map((member) => ({ label: member.name, botId: member.botId })),
-  ].sort((a, b) => b.label.length - a.label.length);
-  const lower = text.toLocaleLowerCase();
-  for (let at = lower.indexOf('@'); at >= 0; at = lower.indexOf('@', at + 1)) {
-    if (at > 0 && WORD_BEFORE_AT.test(text[at - 1] ?? '')) continue;
-    const match = labels.find((entry) => {
-      const candidate = entry.label.toLocaleLowerCase();
-      return lower.startsWith(candidate, at + 1) && endsAtBoundary(candidate, lower[at + 1 + candidate.length]);
-    });
-    if (!match) continue;
-    if (!match.botId) all = true;
-    else if (!ordered.includes(match.botId)) ordered.push(match.botId);
-  }
-  return { all, botIds: structured.length > 0 ? structured : ordered };
+  return resolveBotGroupMessageMentions(text, {
+    members,
+    picked: input,
+    allLabels: BOT_GROUP_EVERYONE_LABELS,
+    ...(options.excludeBotIds ? { excludeBotIds: options.excludeBotIds } : {}),
+  });
 }
 
 /** Speaking order for one circle: start one position later each circle. */
@@ -1102,13 +1071,20 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
       // Reserve the slot before awaiting so concurrent replies cannot exceed the cap.
       if (outcome.kind === 'reply' && posted < MAX_BOT_MESSAGES_PER_ROUND) {
         posted += 1;
+        const content = clampChars(outcome.text, MAX_BOT_REPLY_CHARS);
         await appendMessage({
           groupId: input.groupId,
           kind: 'message',
           authorKind: 'bot',
           authorBotId: member.botId,
           authorName: member.name,
-          content: clampChars(outcome.text, MAX_BOT_REPLY_CHARS),
+          content,
+          // A companion naming a teammate in its reply addresses that teammate, the same
+          // way a typed human mention does. It never mentions itself; members that are
+          // not active are simply not named (a reply must still be posted).
+          mentions: resolveGroupMentions(content, null, members.filter((row) => row.status === 'active'), {
+            excludeBotIds: [member.botId],
+          }),
         });
         spoke = true;
         emit(input.groupId, 'messages', input.scope);

@@ -2522,6 +2522,28 @@ Mobile 据此区分已关闭与已删除的旧选择：保留任务或草稿原�
 合并相同在途请求并缓存最近成功回执，服务器 operationId 仍是最终幂等依据。
 不新增 IPC channel、数据库迁移或 Mobile 原生指纹输入。
 
+### 伙伴群聊回复点名（`groupReplyMentions`，客户端已接、服务端待实现）
+
+Chat Server `/me` 可追加 `capabilities.groupReplyMentions: 1`，表示执行结果提交
+（`POST /conversations/:room/executions/:id`，`action=complete`）接受可选 `mentions`（actor ID 数组，
+最多 100），由服务端把伙伴回复正文里的 `@名字` 变成真正的点名，并为被点名的伙伴排队执行。
+
+客户端只在看到该能力时发送该字段：旧服务端 `executionUpdate` 是 strict schema，不接受未知字段，
+会拒绝整条回复（HTTP 400），所以不能无条件发送。客户端口径：
+
+- 伙伴回复只有正文，按当前 joined 成员中的 bot 解析：最长匹配、大小写不敏感、CJK 名可直接接正文、
+  邮箱/标识符里的 `@` 不算；丢弃回复者自己、未知名字、已离开成员和非 bot 成员（不能因此让回复失败）；
+  去重后最多 100 项；`@所有人` 按现有广播语义展开为全部可回答伙伴。
+- 只对普通主群/话题回复生效；分工步骤、队列回合和入群欢迎不带点名。
+- 服务端仍须把 mention 过滤成 joined 成员，而不是因竞态整条拒绝；客户端收到 `MENTION_NOT_MEMBER` 时
+  会去掉该字段、用同一份结果重交，回复仍然送达。
+- 服务端还必须为被点名的伙伴排队执行：当前 `chat-server/src/work.ts` 的完成路径把
+  `mentions: []` 写死，且派发只从 `origin='user'` 的消息开队列；只保存字段而不排队只能产生
+  未读提醒，叫不醒伙伴。
+
+发布顺序：服务端整集群先升级并声明能力，再更新依赖该行为的提示词或说明；旧客户端不发该字段，
+行为不变。产品口径（伙伴回复是否可以叫醒伙伴）见 `docs/product-rules/bot-group-chat.md` §4.0。
+
 ### 服务器伙伴群讨论与分工补全
 
 Chat Server `/me` 追加 `capabilities.groupDiscussionParity: 1`。Desktop 只在该能力存在时发送

@@ -34,6 +34,15 @@ export interface BotGroupMentionQuery {
 /** 候选词最长这么多字；再长就当成普通正文，不再弹候选。 */
 const MAX_MENTION_QUERY_CHARS = 32;
 
+/** Server contract: one message names at most this many recipients. */
+export const BOT_GROUP_MENTION_LIMIT = 100;
+
+/**
+ * Every localized 「所有人」 label the composer can insert, plus common typed forms.
+ * Typed mentions (including a Bot's own reply) read the same list.
+ */
+export const BOT_GROUP_EVERYONE_LABELS = ['所有人', '所有伙伴', '全員', '모두', 'everyone', 'all'];
+
 /** `@` 紧跟在这些字符后面时是邮箱或标识符的一部分，不是点名。 */
 const WORD_BEFORE_AT = /[A-Za-z0-9._%+-]/;
 const LATIN_WORD_CHAR = /[A-Za-z0-9_]/;
@@ -93,7 +102,8 @@ interface MentionToken {
   entry: LabelEntry;
 }
 
-function scanMentionTokens(text: string, entries: readonly LabelEntry[]): MentionToken[] {
+function scanMentionTokens(text: string, entries: readonly LabelEntry[], fold = false): MentionToken[] {
+  const haystack = fold ? text.toLocaleLowerCase() : text;
   const tokens: MentionToken[] = [];
   let index = text.indexOf('@');
   while (index >= 0) {
@@ -101,8 +111,8 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
     if (isMentionStart(text, index)) {
       const entry = entries.find(
         (candidate) =>
-          text.startsWith(candidate.label, index + 1) &&
-          endsAtBoundary(candidate.label, text[index + 1 + candidate.label.length]),
+          haystack.startsWith(fold ? candidate.label.toLocaleLowerCase() : candidate.label, index + 1) &&
+          endsAtBoundary(candidate.label, haystack[index + 1 + candidate.label.length]),
       );
       if (entry) {
         const end = index + 1 + entry.label.length;
@@ -113,6 +123,40 @@ function scanMentionTokens(text: string, entries: readonly LabelEntry[]): Mentio
     index = text.indexOf('@', next);
   }
   return tokens;
+}
+
+/**
+ * Resolve who an already written message addresses: a human send with composer
+ * picks, or a companion's own reply, which has only its text. Picks are
+ * authoritative when they exist; text fills in otherwise. Targets outside the
+ * roster (or in `excludeBotIds`, such as the replying Bot itself) are dropped,
+ * never reported: a stale name loses its own mention, not the message.
+ */
+export function resolveBotGroupMessageMentions(
+  text: string,
+  input: {
+    members: readonly BotGroupMentionMember[];
+    allLabels?: readonly string[];
+    picked?: BotGroupMention | null;
+    excludeBotIds?: readonly string[];
+    limit?: number;
+  },
+): BotGroupMention {
+  const limit = Math.max(0, Math.min(input.limit ?? BOT_GROUP_MENTION_LIMIT, BOT_GROUP_MENTION_LIMIT));
+  const excluded = new Set(input.excludeBotIds ?? []);
+  const members = input.members.filter((member) => !excluded.has(member.botId));
+  const allowed = new Set(members.map((member) => member.botId));
+  const picked = [...new Set((input.picked?.botIds ?? []).filter((botId) => allowed.has(botId)))];
+  let all = input.picked?.all === true;
+  const entries = buildLabelEntries(members, input.allLabels ?? BOT_GROUP_EVERYONE_LABELS, []);
+  const ordered: string[] = [];
+  for (const token of scanMentionTokens(text, entries, true)) {
+    if (token.entry.all) all = true;
+    else for (const botId of token.entry.botIds) if (allowed.has(botId) && !ordered.includes(botId)) ordered.push(botId);
+  }
+  // A human's picked list keeps its order and stays authoritative; text only speaks
+  // when nothing was picked (a typed send, or a companion's reply).
+  return { all, botIds: (picked.length ? picked : ordered).slice(0, limit) };
 }
 
 /**

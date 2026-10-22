@@ -324,6 +324,26 @@ describe('botGroupChatService', () => {
     expect(harness.dispatches[0]!.prompt).toContain('NO_REPLY');
   });
 
+  it('stores the teammates a Bot names in its reply, never itself or an unknown name', async () => {
+    const replies: Record<string, string> = {
+      mimi: '@小满 接着看，@咪咪 我也看，@无名 不认识',
+      xiaoman: 'NO_REPLY',
+    };
+    const harness = createHarness((botId) => replies[botId] ?? 'NO_REPLY');
+    const groupId = await createGroup(harness);
+    await harness.service.sendMessage({ groupId, text: '@咪咪 看一下', mentions: { all: false, botIds: [] }, clientId: 'c-1' });
+    const group = await waitForIdle(harness, groupId);
+
+    // The name is only sent to the one Bot the user addressed; the reply's own @
+    // stays ordinary text for a member that left and never names the author.
+    expect(harness.dispatches.map((call) => call.botId)).toEqual(['mimi']);
+    expect(group.messages.map((m) => [m.authorName, m.content, m.mentions])).toEqual([
+      ['', '@咪咪 看一下', { all: false, botIds: ['mimi'] }],
+      ['咪咪', '@小满 接着看，@咪咪 我也看，@无名 不认识', { all: false, botIds: ['xiaoman'] }],
+      ['', '', { all: false, botIds: ['mimi'] }],
+    ]);
+  });
+
   it('a broadcast thinks in parallel first, then members answer each other in turn', async () => {
     const replies: Record<string, string[]> = {
       mimi: ['咪咪的看法', 'NO_REPLY'],
