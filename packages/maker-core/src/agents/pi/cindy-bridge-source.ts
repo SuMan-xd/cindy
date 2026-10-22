@@ -3396,7 +3396,7 @@ class CindyMcpGateway {
       pi.registerTool({
         name: CINDY_SEND_GROUP_MESSAGE_TOOL,
         label: 'Send group message',
-        description: 'Post one message into a group chat as yourself, the teammate, never as your owner. @names in the text become real mentions of joined members; unknown, departed and own names are dropped, and @everyone expands to every other member. Mentioning makes nobody answer. Only your own main task may call it — in a group lane answer in that group directly. It cannot be recalled and the owner must authorize it; reuse idempotency_key when retrying the same message.',
+        description: 'Post one message into a group chat as yourself, the teammate, never as your owner. @names in the text become real mentions of joined members; unknown, departed and own names are dropped, and @everyone expands to every other member. Mentioning wakes nobody this round and each named joined member still gets an unread mention notice; not waking them is a deliberate scope choice, not a missing capability. Only your own main task may call it — in a group lane answer in that group directly. It cannot be recalled and the owner must authorize it; reuse idempotency_key when retrying the same message.',
         parameters: {
           type: 'object',
           properties: {

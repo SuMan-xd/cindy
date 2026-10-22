@@ -127,7 +127,8 @@ Chat Server 声明 `capabilities.groupSingleSpeaker: 1` 时，服务器群按下
   **没有 @ 人时，群里所有能回答的伙伴排成一个队列**（按成员列表顺序）。群里只有一位伙伴能回答时不排队，
   它直接回答。伙伴的回复不叫醒任何伙伴，也不能替自己往队列里加人。
   （服务端声明 `capabilities.groupReplyMentions: 1` 后，伙伴在普通回复里写 `@伙伴名` 会成为真正的点名并
-  叫醒对方；客户端已接、服务端待实现，未声明时仍按上一条不叫醒任何伙伴。）
+  叫醒对方；客户端已接，服务端缺的只是完成路径的接线（`work.ts` 完成路径把 `mentions: []` 写死），
+  显式 `continue` 路线本身已存在，不是能力缺口。未声明时仍按上一条不叫醒任何伙伴。）
 - **排队的形态只有一种：队列卡**（即第 7 节的安排卡）。卡上一步一位伙伴、一次模型调用，宿主按顺序依次派发，
   不另调模型来排顺序。**前 5 位依次自动回答，第 6 位起每位等用户点「继续」**；用户觉得够了就点停止、「结束」或不再继续。
   轮到的伙伴没什么可补充时回复 `NO_REPLY`，群里不显示，但这一步照样算说完。
@@ -751,6 +752,12 @@ Desktop 群聊与话题之间的分隔线支持左右拖拽和方向键调宽；
 `ChatThreadPanel.tsx`。回归：`chatServerThreads.test.ts`、`chatServer.test.ts`（thread previews and main-chat shares）、
 `BotGroupChatView.test.tsx`（thread previews and posting to the main chat）、`maker-shared` 的 `botGroupThreadShare.test.ts`。
 
-2026-10-22：伙伴获得两个群工具（`cindy_helper` 的 bots 类目，与 `list_agents` / `send_to_agent` 同层，Pi 也直接暴露）。`list_groups` 只读，列出当前主人可见的群（服务器房间 + 尚未升级的本地群），每项给群 ID、名称、是否服务器群、是否归档、负责人、成员（含「是否我」、主人 actor、guest 授权、状态）、未结束的安排与最后一条消息摘要；`limit` 默认 20、上界 50，`total` 是真实群数，不读历史。`send_group_message` 一律以伙伴自己的身份发言：本地群写 `authorKind=bot` 的行，服务器群以该伙伴 actor 提交（`POST /conversations/:id/messages`，`operationId` 即幂等键），不存在「以主人身份发言」的轨道。正文里的 `@名字` 与输入框同一套解析（离群、未知、自己丢弃；`@所有人` 展开为其余成员）；服务端以 `MENTION_NOT_MEMBER` 拒绝点名时去掉点名重发同一正文，消息不因一个失效名字丢失。两个工具只认伙伴自己的主任务与私聊话题（`canonical` / `thread`）；群 lane（`group`）、IM 渠道（`channel`）、历史链接与子任务一律拒绝，群 lane 请直接在该群答复。对外发言不可撤回，`send_group_message` 属于宿主动作授权工具（`TASK_ACTION_TOOLS`）：没有主人的当次授权就拒绝，自动跟随不获得这一开口。发言不唤醒任何人——服务器只从用户消息开队列，被点名的伙伴不会自动接话。回归见 `botGroupTools.test.ts`、`botGroupChatService.test.ts`、`chatServer.test.ts`、`taskActionAuthorization.test.ts` 与 `cindyBridgeSource.test.ts`。
+2026-10-22：伙伴获得两个群工具（`cindy_helper` 的 bots 类目，与 `list_agents` / `send_to_agent` 同层，Pi 也直接暴露）。`list_groups` 只读，列出当前主人可见的群（服务器房间 + 尚未升级的本地群），每项给群 ID、名称、是否服务器群、是否归档、负责人、成员（含「是否我」、主人 actor、guest 授权、状态）、未结束的安排与最后一条消息摘要；`limit` 默认 20、上界 50，`total` 是真实群数，不读历史。`send_group_message` 一律以伙伴自己的身份发言：本地群写 `authorKind=bot` 的行，服务器群以该伙伴 actor 提交（`POST /conversations/:id/messages`，`operationId` 即幂等键），不存在「以主人身份发言」的轨道。正文里的 `@名字` 与输入框同一套解析（离群、未知、自己丢弃；`@所有人` 展开为其余成员）；服务端以 `MENTION_NOT_MEMBER` 拒绝点名时去掉点名重发同一正文，消息不因一个失效名字丢失。两个工具只认伙伴自己的主任务与私聊话题（`canonical` / `thread`）；群 lane（`group`）、IM 渠道（`channel`）、历史链接与子任务一律拒绝，群 lane 请直接在该群答复。对外发言不可撤回，`send_group_message` 属于宿主动作授权工具（`TASK_ACTION_TOOLS`）：没有主人的当次授权就拒绝，自动跟随不获得这一开口。
+
+同名成员按共享解析的既有口径处理：手打短名 `@Cindy` 会点名**所有**同名伙伴，从候选里选中完整名字（`Cindy (Chris)`）只点名那一位；同一条消息里重复点名同一目标只算一次。桌面与手机输入框一直如此（`buildLabelEntries` 合并同名、最长匹配优先），本轮只是让伙伴回复正文与 `send_group_message` 的正文走同一实现；被删掉的本地实现（`labels.find` 只认第一个同名目标）只在调用方不带结构化点名时才生效，输入框路径总会先解析出结构化点名，所以那条路径的行为不变。
+
+**发言不唤醒任何人，这是本轮取舍，不是服务端做不到（2026-10-23 更正）**：服务端已有的显式 `continue` 路线今天就能叫醒被点名的人——`POST /conversations/:room/messages/:id/continue`（`chat-server/src/app.ts:647`）→ `work.ts:774-809` 只要求 `write` 权限 → `queueRound`（`work.ts:86-118`）只看 `source.mentions`，而 `POST /messages` 真的把 mentions 存库（`messages.ts:87-97`、`:120-133`），伙伴 actor 经 `X-Chat-Actor` 拿到的是全量权限（`identity.ts:56-63`）。本轮不接是因为守住「不许伙伴替自己往队列里加人」（§4.0）并避免 A→B→A 互相接话的乒乓。自动 fanout 仍只认 `origin='user'` 的消息（`work.ts:214-232`），所以伙伴发言不会触发它。
+
+「不叫醒」也不等于「对方看不到」：服务器群发言会给被点名的 joined 成员留下点名提醒／未读（`chat_notice`，`reason=mention`，`work.ts:239-276`），伙伴在工具返回值里看到 `wakes_teammates: false` 应理解为「没人会因此开始回答」。回归见 `botGroupTools.test.ts`、`botGroupChatService.test.ts`、`chatServer.test.ts`、`taskActionAuthorization.test.ts` 与 `cindyBridgeSource.test.ts`。
 
 2026-10-22：**伙伴不能当分工的创建者**，因此本轮不做「让伙伴自己发起分工」的工具。服务器 `POST /conversations/:id/plans` 要求发起人就是来源消息作者（`PLAN_OWNER_REQUIRED`，403），且来源消息必须是 `origin='user'`（`USER_REQUEST_REQUIRED`）；伙伴发的消息 `origin='bot'`，它也不能替别人的消息建计划。`planAction`（开始 / 继续 / 重试 / 停止 / 改步骤）同样要求 `creator_id` 是本人，或成员角色是群主 / 管理员，而伙伴的成员角色固定为 `member`。要支持这一条必须先改服务端契约，不能用主人身份绕过。

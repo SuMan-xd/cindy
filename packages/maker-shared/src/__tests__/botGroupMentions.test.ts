@@ -43,6 +43,18 @@ describe('resolveBotGroupMessageMentions', () => {
       .toEqual({ all: false, botIds: ['suman'] });
   });
 
+  // bot-group-chat.md §10: 同名成员（不同主人带来的同名伙伴）手打短名时点名所有同名伙伴，
+  // 从候选选中的完整名字只点名那一位。去掉 buildLabelEntries 的同名合并，第一条就会挂。
+  it('names every companion sharing a short name, while a full name names only that one', () => {
+    const namesakes = [
+      { botId: 'cindy-chris', name: 'Cindy (Chris)', displayName: 'Cindy' },
+      { botId: 'cindy-dave', name: 'Cindy (Dave)', displayName: 'Cindy' },
+    ];
+    const ask = (text: string) => resolveBotGroupMessageMentions(text, { members: namesakes });
+    expect(ask('@Cindy 看一下')).toEqual({ all: false, botIds: ['cindy-chris', 'cindy-dave'] });
+    expect(ask('@Cindy (Dave) 看一下')).toEqual({ all: false, botIds: ['cindy-dave'] });
+  });
+
   it('honours every broadcast label and caps the list like the server contract', () => {
     expect(resolve('@所有人 开会', { picked: { all: false, botIds: ['abu'] } }))
       .toEqual({ all: true, botIds: ['abu'] });

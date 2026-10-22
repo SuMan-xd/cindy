@@ -2538,8 +2538,15 @@ Chat Server `/me` 可追加 `capabilities.groupReplyMentions: 1`，表示执行�
 - 服务端仍须把 mention 过滤成 joined 成员，而不是因竞态整条拒绝；客户端收到 `MENTION_NOT_MEMBER` 时
   会去掉该字段、用同一份结果重交，回复仍然送达。
 - 服务端还必须为被点名的伙伴排队执行：当前 `chat-server/src/work.ts` 的完成路径把
-  `mentions: []` 写死，且派发只从 `origin='user'` 的消息开队列；只保存字段而不排队只能产生
-  未读提醒，叫不醒伙伴。
+  `mentions: []` 写死，只保存字段而不排队只能产生未读提醒，叫不醒伙伴。
+- **这不是“服务端做不到”**（2026-10-23 更正）：显式 `continue` 路线已存在——
+  `POST /conversations/:room/messages/:id/continue`（`app.ts:647`）→ `work.ts:774-809` 只要求 `write`
+  权限 → `queueRound`（`work.ts:86-118`）只看 `source.mentions`，而 `POST /messages` 真的把 mentions
+  存库（`messages.ts:87-97`、`:120-133`）；bot actor 经 `X-Chat-Actor` 拿到的是全量权限
+  （`identity.ts:56-63`）。所以“伙伴发带提及的消息 + 调一次 `continue`”今天就能叫醒被点名的 joined
+  伙伴。上文“派发只从 `origin='user'` 的消息开队列”仅指 `work.ts:214-232` 的自动 fanout，不含 `continue`。
+  缺的只是完成路径的接线（或完成后补一次 `continue`）；要不要接是产品取舍
+  （`bot-group-chat.md` §4.0：不许伙伴往队列里加人，并防 A→B→A 乒乓）。
 
 发布顺序：服务端整集群先升级并声明能力，再更新依赖该行为的提示词或说明；旧客户端不发该字段，
 行为不变。产品口径（伙伴回复是否可以叫醒伙伴）见 `docs/product-rules/bot-group-chat.md` §4.0。

@@ -522,7 +522,7 @@ function registerSendToAgentEntry(
     name: 'send_group_message', category: 'bots',
     description: [
       'Post one message into a group chat as yourself — the teammate, never as your owner.',
-      '@names in text are resolved against that group the same way the composer resolves them: a name that belongs to a joined member becomes a real mention, an unknown, departed or own name is dropped, and @everyone expands to every other member. Mentioning does not make anyone answer.',
+      '@names in text are resolved against that group the same way the composer resolves them: a name that belongs to a joined member becomes a real mention, an unknown, departed or own name is dropped, and @everyone expands to every other member. Mentioning wakes nobody this round and each named joined member still gets an unread mention notice; not waking them is a deliberate scope choice (no teammate may add anyone to the queue), not a missing capability.',
       'Only your own main task may call this; in a group lane answer in that group directly. Nothing is recalled once posted, and the owner must authorize the action, so prepare the exact group, text and recipients first. Reuse idempotency_key when retrying the same message.',
       'This is not a substitute for start_session_task, and it starts no task, no progress and no reply contract.',
     ].join('\n'),
@@ -544,7 +544,7 @@ function registerSendToAgentEntry(
         message_id: result.messageId,
         mentioned: result.mentioned,
         wakes_teammates: false,
-        guidance: 'The message is stored. Posting never queues an answer for anyone named, and it cannot be undone.',
+        guidance: 'The message is stored and cannot be undone. Posting queues no answer for anyone named this round; named members still see an unread mention notice.',
       });
     },
   });
