@@ -16943,7 +16943,18 @@
     "privateUnavailable": "当前伙伴私聊不可用，请稍后重试。",
     "idempotencyConflict": "此重试标识已用于另一条消息。",
     "privateUnconfirmed": "私聊未确认送达，请使用同一重试标识重试。",
-    "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。"
+    "verificationUnavailable": "暂时无法核验群聊授权，请在连接恢复后重试。",
+    "botSessionRequired": "当前调用未绑定伙伴任务。",
+    "groupLaneNotAllowed": "只有伙伴主任务能使用群工具；群 lane 请直接在这个群里答复。",
+    "groupServiceUnavailable": "群聊服务未就绪，请稍后重试。",
+    "invalidGroupId": "需要群聊标识。",
+    "emptyMessage": "消息不能为空。",
+    "messageTooLong": "消息过长，最多 {{max}} 字。",
+    "groupNotFound": "群聊不存在，或当前账号看不到它。",
+    "groupArchived": "群聊已归档。",
+    "groupDissolved": "群聊已解散。",
+    "notAMember": "当前伙伴不在这个群里。",
+    "botUnavailable": "当前伙伴已暂停或归档。"
   },
   "codexResets": {
     "retryReset": "重试重置",

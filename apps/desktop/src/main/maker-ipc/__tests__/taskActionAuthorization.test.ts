@@ -615,6 +615,25 @@ describe('Desktop owner input task actions', () => {
     },
   );
 
+  // bot-group-chat.md §10 (unit): 群里的发言是向外、不可撑回的动作，只能由主人授权。
+  // 上面按 TASK_ACTION_TOOLS 循环的用例在新工具忘了入表时会静默少测一个，这里点名验证它，
+  // 并同时钉住运行期审批档不是静默放行。
+  it('requires the owner’s authorization before a teammate speaks in a group', async () => {
+    const h = fixture();
+    const post = vi.fn(async () => 'stored');
+    const denied = await withToolCallAuthority(h.authorize, call('send_group_message'), post);
+    expect(denied).toMatchObject({ isError: true });
+    expect(JSON.stringify(denied)).toContain('TASK_ACTION_AUTHORIZATION_REQUIRED');
+    expect(post).not.toHaveBeenCalled();
+    expect(h.confirm).not.toHaveBeenCalled();
+    expect(getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_helper', toolName: 'send_group_message' }))
+      .toBe('prompt-each-time');
+    // With the owner's own request the same call is confirmed once, then admitted once.
+    const owner = fixture(true);
+    expect(await withToolCallAuthority(owner.authorize, call('send_group_message'), post)).toBe('stored');
+    expect(owner.confirm).toHaveBeenCalledOnce();
+  });
+
   it('keeps automatic/forwarded input restricted even with an unrelated live group owner grant', async () => {
     const h = desktopFixture('automatic');
     releases.push(

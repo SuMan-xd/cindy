@@ -2570,6 +2570,8 @@ const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
+const CINDY_LIST_GROUPS_TOOL = 'list_groups';
+const CINDY_SEND_GROUP_MESSAGE_TOOL = 'send_group_message';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -2580,6 +2582,8 @@ const CINDY_DIRECT_BOT_TOOLS = new Set([
   CINDY_SEND_TO_AGENT_TOOL,
   CINDY_CHECK_AGENT_MESSAGE_TOOL,
   CINDY_LIST_AGENTS_TOOL,
+  CINDY_LIST_GROUPS_TOOL,
+  CINDY_SEND_GROUP_MESSAGE_TOOL,
   CINDY_CREATE_TEAMMATE_TOOL,
   'routine_list', 'routine_save', 'routine_sources',
   'routine_history', 'routine_delete', 'routine_run_now', 'schedule_notify_current_run', 'schedule_set_pre_run_hook',
@@ -3370,6 +3374,41 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeDirectHelperTool(CINDY_SEND_TO_AGENT_TOOL, params, signal),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_LIST_GROUPS_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_LIST_GROUPS_TOOL,
+        label: 'List group chats',
+        description: 'List the group chats your owner can see, on this computer and on the Chat Server. Read-only. Each row carries groupId, name, serverBacked, archived, organizerBotId, every member (botId, name, isSelf for you, ownerActorId, guestAccess, status), the open plan and a one-line preview of the last message. Use the exact groupId with send_group_message; never route by name. No message history is read.',
+        parameters: {
+          type: 'object',
+          properties: { limit: { type: 'integer', minimum: 1, maximum: 50 } },
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_LIST_GROUPS_TOOL, params, signal),
+      });
+    }
+
+    if (this.resolveDirectHelperTool(CINDY_SEND_GROUP_MESSAGE_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_SEND_GROUP_MESSAGE_TOOL,
+        label: 'Send group message',
+        description: 'Post one message into a group chat as yourself, the teammate, never as your owner. @names in the text become real mentions of joined members; unknown, departed and own names are dropped, and @everyone expands to every other member. Mentioning makes nobody answer. Only your own main task may call it — in a group lane answer in that group directly. It cannot be recalled and the owner must authorize it; reuse idempotency_key when retrying the same message.',
+        parameters: {
+          type: 'object',
+          properties: {
+            group_id: { type: 'string', minLength: 1, maxLength: 160 },
+            text: { type: 'string', minLength: 1, maxLength: 8000 },
+            idempotency_key: { type: 'string', pattern: '^[\\w-]{8,100}$' },
+          },
+          required: ['group_id', 'text'],
+          additionalProperties: false,
+        },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_SEND_GROUP_MESSAGE_TOOL, params, signal),
       });
     }
 

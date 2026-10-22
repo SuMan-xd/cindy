@@ -228,6 +228,26 @@ interface BotMessagingCallbacks {
         messageId?: string;
       }
   >;
+  /** The owner-visible group chats, projected for this teammate. Read-only. */
+  listGroups?(params: { callerSessionId: string; limit?: number }): Promise<
+    | { ok: true; groups: unknown[]; total: number }
+    | { ok: false; errorCode: string; message: string }>;
+  /** One message the teammate posts into a group as itself, never as its owner. */
+  sendGroupMessage?(params: {
+    callerSessionId: string;
+    groupId: string;
+    text: string;
+    idempotencyKey?: string;
+  }): Promise<
+    | {
+        ok: true;
+        groupId: string;
+        groupName: string;
+        serverBacked: boolean;
+        messageId: string;
+        mentioned: Array<{ botId: string; name: string }>;
+      }
+    | { ok: false; errorCode: string; message: string }>;
 }
 
 // ── Entry tool registration ──────────────────────────────────────────────────
@@ -481,6 +501,51 @@ function registerSendToAgentEntry(
       if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
       const result = await deps.botMessaging!.listAgents!({ callerSessionId });
       return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.botMessaging.listGroups) registry.register({
+    name: 'list_groups', category: 'bots',
+    description: [
+      'List the group chats your owner can see on this computer and on the Chat Server. Read-only.',
+      'Each row carries groupId, name, serverBacked, archived, organizerBotId, every member (botId, name, isSelf for you, ownerActorId, guestAccess, status), the open plan (id, status, currentStep) and a one-line preview of the last message.',
+      'Use the exact groupId with send_group_message; never route by name. limit bounds the answer (default 20, max 50) and total is how many exist; the newest groups come first. No message history is read.',
+    ].join('\n'),
+    inputShape: { limit: z.number().int().min(1).max(50).optional().describe('How many groups to return; newest first.') },
+    handler: async ({ limit }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', 'An active teammate is required');
+      const result = await deps.botMessaging!.listGroups!({ callerSessionId, limit });
+      return result.ok ? okPayload(result) : errorPayload(result.errorCode, result.message);
+    },
+  });
+  if (deps.botMessaging.sendGroupMessage) registry.register({
+    name: 'send_group_message', category: 'bots',
+    description: [
+      'Post one message into a group chat as yourself — the teammate, never as your owner.',
+      '@names in text are resolved against that group the same way the composer resolves them: a name that belongs to a joined member becomes a real mention, an unknown, departed or own name is dropped, and @everyone expands to every other member. Mentioning does not make anyone answer.',
+      'Only your own main task may call this; in a group lane answer in that group directly. Nothing is recalled once posted, and the owner must authorize the action, so prepare the exact group, text and recipients first. Reuse idempotency_key when retrying the same message.',
+      'This is not a substitute for start_session_task, and it starts no task, no progress and no reply contract.',
+    ].join('\n'),
+    inputShape: {
+      group_id: z.string().min(1).max(160).describe('The exact groupId from list_groups.'),
+      text: z.string().trim().min(1).max(8_000).describe('The message text; may name members with @name.'),
+      idempotency_key: z.string().regex(/^[\w-]{8,100}$/).optional().describe('Optional retry identifier for this same message.'),
+    },
+    handler: async ({ group_id, text, idempotency_key }) => {
+      const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
+      if (!callerSessionId) return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
+      const result = await deps.botMessaging!.sendGroupMessage!({ callerSessionId, groupId: group_id, text, idempotencyKey: idempotency_key });
+      if (!result.ok) return errorPayload(result.errorCode, result.message);
+      return okPayload({
+        action: 'send_group_message',
+        group_id: result.groupId,
+        group_name: result.groupName,
+        server_backed: result.serverBacked,
+        message_id: result.messageId,
+        mentioned: result.mentioned,
+        wakes_teammates: false,
+        guidance: 'The message is stored. Posting never queues an answer for anyone named, and it cannot be undone.',
+      });
     },
   });
   registry.register({

@@ -59,6 +59,7 @@ import { readLspModeSettings } from '../maker-host/lsp-mode-store.js';
 import {
   tryGetBotDelegationService,
   tryGetBotDirectMessageService,
+  tryGetBotGroupToolsService,
   tryGetOrcaCollabService,
   isSessionInTurn,
   getSessionInputProvenance,
@@ -990,6 +991,23 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           const svc = tryGetBotDirectMessageService();
           if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Teammate service is not ready' };
           return svc.listAgents(callerSessionId);
+        },
+        listGroups: async (params) => {
+          const svc = tryGetBotGroupToolsService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: t('groupTools.groupServiceUnavailable') };
+          return svc.listGroups(params);
+        },
+        // Speaking in a group cannot be undone; the host's task-action authorization runs first
+        // (send_group_message is in TASK_ACTION_TOOLS), so this call only reaches storage once
+        // the owner's consent for this exact action exists.
+        sendGroupMessage: async (params) => {
+          const svc = tryGetBotGroupToolsService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: t('groupTools.groupServiceUnavailable') };
+          try {
+            return await svc.sendGroupMessage(params);
+          } catch (err) {
+            return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
+          }
         },
         messageAgent: async (params) => {
           const svc = tryGetBotDirectMessageService();

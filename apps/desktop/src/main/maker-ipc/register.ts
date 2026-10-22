@@ -604,6 +604,7 @@ import {
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
 import { createBotGroupChatService, settleBotGroupLaneTerminal, type BotGroupChatService, type BotGroupChatServiceDeps, type BotGroupLaneTerminal } from './botGroupChatService.js';
+import { createBotGroupToolsService, type BotGroupToolsService } from './botGroupTools.js';
 import { settleUndispatchedBotGroupTurn } from './botGroupRuntimeFailure.js';
 import { withChatServer } from './chatServer.js';
 import { companionHomes, isCompanionShadowed } from '../companion-cloud/homes.js';
@@ -2938,6 +2939,8 @@ let orcaCollabServiceHolder: OrcaCollabService | null = null;
 let botDelegationServiceHolder: BotDelegationService | null = null;
 let botDirectMessageServiceHolder: BotDirectMessageService | null = null;
 let botGroupChatServiceHolder: BotGroupChatService | null = null;
+/** 群工具（list_groups / send_group_message）的服务；群服务每次现取，跟随账号切换。 */
+let botGroupToolsServiceHolder: BotGroupToolsService | null = null;
 /**
  * Settle a pending account / endpoint switch before using the companion runtime: the lazy Chat
  * Server wrapper rebinds only when touched. (The home registry itself is owner-scoped.)
@@ -3088,6 +3091,10 @@ export function tryGetBotDelegationService(): BotDelegationService | null {
 
 export function tryGetBotDirectMessageService(): BotDirectMessageService | null {
   return botDirectMessageServiceHolder;
+}
+
+export function tryGetBotGroupToolsService(): BotGroupToolsService | null {
+  return botGroupToolsServiceHolder;
 }
 
 function createBridgeWorkerLabel(task: string): string {
@@ -12657,6 +12664,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   };
   botGroupChatServiceHolder = withChatServer(createBotGroupChatService(botGroupChatDeps), botGroupChatDeps);
+  botGroupToolsServiceHolder = createBotGroupToolsService({
+    groups: () => botGroupChatServiceHolder,
+    captureOwnerScope: captureDataOwnerBroadcastScope,
+    isOwnerScopeCurrent: (scope) =>
+      isDataOwnerBroadcastScopeCurrent(
+        scope as ReturnType<typeof captureDataOwnerBroadcastScope>,
+      ),
+    createId,
+    log,
+  });
   unsubscribeCompanionCloudBroadcast?.();
   unsubscribeCompanionCloudBroadcast = companionHomes.onChange((snapshot) => {
     const scope = captureDataOwnerBroadcastScope();

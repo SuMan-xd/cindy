@@ -344,6 +344,43 @@ describe('botGroupChatService', () => {
     ]);
   });
 
+  // bot-group-chat §10 (unit): `send_group_message` 的本地 lane。既有用例只覆盖「主人发言 → 派发」，
+  // 无法证明伙伴自己发言时的作者身份、点名解析、幂等与不叫醒任何人（派发只从主人发言开）。
+  it('posts a teammate’s own group message, naming faces and waking nobody', async () => {
+    const harness = createHarness(() => 'NO_REPLY');
+    const groupId = await createGroup(harness);
+    const posted = await harness.service.postBotGroupMessage({
+      groupId, botId: 'mimi', text: '@小满 看下这个，@无名 也看，@咪咪 我自己', clientId: 'tool-1',
+    });
+    expect(posted).toMatchObject({ ok: true, mentionedBotIds: ['xiaoman'] });
+    let group = await waitForIdle(harness, groupId);
+    expect(group.messages.at(-1)).toMatchObject({
+      authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪',
+      content: '@小满 看下这个，@无名 也看，@咪咪 我自己', mentions: { all: false, botIds: ['xiaoman'] },
+    });
+    // A teammate's own message is stored, never answered: only a user request starts a round.
+    expect(harness.dispatches).toHaveLength(0);
+    // Same message again is the same row, not a second one.
+    expect(await harness.service.postBotGroupMessage({
+      groupId, botId: 'mimi', text: '@小满 看下这个，@无名 也看，@咪咪 我自己', clientId: 'tool-1',
+    })).toMatchObject({ ok: true, messageId: posted.ok ? posted.messageId : undefined });
+    group = await waitForIdle(harness, groupId);
+    expect(group.messages.filter((message) => message.authorBotId === 'mimi')).toHaveLength(1);
+    // `@所有人` is reported as the members it actually reached.
+    const broadcast = await harness.service.postBotGroupMessage({ groupId, botId: 'mimi', text: '@所有人 明早出发', clientId: 'tool-2' });
+    expect(broadcast).toMatchObject({ ok: true, mentionedBotIds: ['xiaoman', 'abu'] });
+    // Each refusal has its own code, before anything is stored.
+    expect(await harness.service.postBotGroupMessage({ groupId, botId: 'cindy', text: '在吗', clientId: 'tool-3' }))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(await harness.service.postBotGroupMessage({ groupId, botId: 'mimi', text: '   ', clientId: 'tool-4' }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(await harness.service.postBotGroupMessage({ groupId, botId: 'mimi', text: '长'.repeat(8_001), clientId: 'tool-5' }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(await harness.service.postBotGroupMessage({ groupId: 'missing', botId: 'mimi', text: '在吗', clientId: 'tool-6' }))
+      .toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    expect(harness.dispatches).toHaveLength(0);
+  });
+
   it('a broadcast thinks in parallel first, then members answer each other in turn', async () => {
     const replies: Record<string, string[]> = {
       mimi: ['咪咪的看法', 'NO_REPLY'],

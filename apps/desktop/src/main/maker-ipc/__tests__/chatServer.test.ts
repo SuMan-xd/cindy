@@ -574,6 +574,49 @@ describe('Chat Server result delivery and refresh', () => {
     expect(deliveries()[1][2]).not.toHaveProperty('mentions');
     expect(deliveries()[1][2].content).toEqual([{ type: 'text', text: '@小满 你接着看' }]);
   });
+  it('posts a teammate’s own group message as that teammate, and keeps the text when names are refused', async () => {
+    const savedId = '60000000-0000-4000-8000-000000000009';
+    let refuseMentions = false;
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/actors') return { body: [{ id: botId, kind: 'bot', externalId: 'local-bot', name: 'Bot' }] };
+      if (route === `/conversations/${roomId}/snapshot`) return { body: { room: room(roomId), members: replyMembers, messages: [], cursor: '1' } };
+      if (route.endsWith('/messages') && method === 'POST') {
+        if (refuseMentions) { refuseMentions = false; return { status: 409, body: { error: { code: 'MENTION_NOT_MEMBER' } } }; }
+        return { body: { id: savedId } };
+      }
+      return response(route);
+    });
+    const text = '@小满 @阿布 @Bot 一起看';
+    const published = () => fixture.handle.mock.calls.filter(([route, method]) => route === `/conversations/${roomId}/messages` && method === 'POST');
+    fixture.requests = [];
+
+    expect(await service.postBotGroupMessage({ groupId: roomId, botId: 'local-bot', text, clientId: 'group-tool-1' }))
+      .toEqual({ ok: true, messageId: savedId, mentionedBotIds: [friendId] });
+    // The author is the Bot's own actor, never the owner, and only joined members stay named:
+    // the departed Bot and the author's own name are dropped from the text's @ tokens.
+    expect(fixture.requests.filter(request => request.url.endsWith('/messages')).map(request => request.actor))
+      .toEqual([botId]);
+    expect(published()[0]![2]).toEqual({ operationId: 'group-tool-1', content: [{ type: 'text', text }], mentions: [friendId] });
+    // A name that left between reading the members and posting loses only its mention:
+    // the refused attempt is retried once with the same text, the same operation id and no names.
+    refuseMentions = true;
+    expect(await service.postBotGroupMessage({ groupId: roomId, botId: 'local-bot', text, clientId: 'group-tool-2' }))
+      .toEqual({ ok: true, messageId: savedId, mentionedBotIds: [] });
+    expect(published().map(([, , body]) => body)).toEqual([
+      { operationId: 'group-tool-1', content: [{ type: 'text', text }], mentions: [friendId] },
+      { operationId: 'group-tool-2', content: [{ type: 'text', text }], mentions: [friendId] },
+      { operationId: 'group-tool-2', content: [{ type: 'text', text }] },
+    ]);
+
+    // A Bot that is neither owned here nor joined here cannot speak in this room.
+    fixture.handle.mockImplementation((route, method) => {
+      if (route === '/actors') return { body: [] };
+      return response(route);
+    });
+    expect(await service.postBotGroupMessage({ groupId: roomId, botId: 'local-bot', text, clientId: 'group-tool-3' }))
+      .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(published()).toHaveLength(3);
+  });
   it.each([408, 429, 503])('reuses imported images after HTTP %s and completion ACK loss', async status => {
     replyImages.mockResolvedValueOnce({ text: 'Original image', attachments: [replyImage] }).mockRejectedValue(new Error('ATTACHMENT_UNAVAILABLE'));
     fixture.upload.mockRejectedValueOnce(new ChatResponseError('TEMPORARY_UPLOAD', status)).mockResolvedValue([imageBlock]);

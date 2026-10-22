@@ -618,6 +618,68 @@ describe("cindy_helper MCP server", () => {
     }
   });
 
+  // bot-group-chat.md §10 (integration, in-process MCP): 群工具与伙伴间消息同一层，
+  // 且没有群回叫的宿主（旧宿主 / 插件作用域）看不到这两个入口——不能“存在但永远失败”。
+  it('exposes the two group tools only to a host that can serve them', async () => {
+    const listGroups = vi.fn(async () => ({
+      ok: true as const, total: 2,
+      groups: [{ groupId: 'room-1', name: '周末出游', serverBacked: true, archived: false, organizerBotId: 'x',
+        members: [{ botId: 'mimi', name: '咪咪', isSelf: true, status: 'active' }], openPlan: null, lastMessage: null, isMember: true }],
+    }));
+    const sendGroupMessage = vi.fn(async () => ({
+      ok: true as const, groupId: 'room-1', groupName: '周末出游', serverBacked: true,
+      messageId: 'message-1', mentioned: [{ botId: 'xiaoman', name: '小满' }],
+    }));
+    const server = createXdtHelperMcpServer(
+      { resolveSurface: async () => 'bot', botMessaging: { messageAgent: vi.fn(), checkMessage: vi.fn(), listGroups, sendGroupMessage } },
+      { agentKind: 'claude-code', workingDir: '/repo', sessionId: 'bot-a-main' },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'cindy-bot-group-tools-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      expect(parsePayload(await client.callTool({ name: 'list_groups', arguments: { limit: 5 } })))
+        .toMatchObject({ ok: true, total: 2, groups: [{ groupId: 'room-1', serverBacked: true }] });
+      expect(listGroups).toHaveBeenCalledWith({ callerSessionId: 'bot-a-main', limit: 5 });
+      const posted = parsePayload(await client.callTool({ name: 'send_group_message', arguments: {
+        group_id: 'room-1', text: '@小满 帮我看下', idempotency_key: 'retry-1234',
+      } }));
+      expect(posted).toMatchObject({ ok: true, message_id: 'message-1', group_id: 'room-1', group_name: '周末出游',
+        mentioned: [{ botId: 'xiaoman', name: '小满' }], wakes_teammates: false });
+      // The host resolves the author from the caller's own Session; no tool argument names it.
+      expect(sendGroupMessage).toHaveBeenCalledWith({ callerSessionId: 'bot-a-main', groupId: 'room-1',
+        text: '@小满 帮我看下', idempotencyKey: 'retry-1234' });
+      // The idempotency key is part of the tool's input schema: a bad one never reaches the host.
+      expect(await client.callTool({ name: 'send_group_message', arguments: {
+        group_id: 'room-1', text: '@小满 在吗', idempotency_key: 'bad key',
+      } })).toMatchObject({ isError: true });
+      expect(sendGroupMessage).toHaveBeenCalledTimes(1);
+      expect(parsePayload(await client.callTool({ name: 'list_groups', arguments: {} }))).toMatchObject({ ok: true });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it('does not register the group tools for a host without group callbacks', async () => {
+    const server = createXdtHelperMcpServer(
+      { resolveSurface: async () => 'bot', botMessaging: { messageAgent: vi.fn(), checkMessage: vi.fn() } },
+      { agentKind: 'claude-code', workingDir: '/repo', sessionId: 'bot-a-main' },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'cindy-bot-group-tools-absent-test', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      for (const name of ['list_groups', 'send_group_message']) {
+        const result = await client.callTool({ name, arguments: { group_id: 'room-1', text: '在吗' } });
+        expect(result).toMatchObject({ isError: true });
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discovers and calls the arbitrary session queue tool through the entry tools", async () => {
     const listSessionQueue = vi.fn(async () => ({
       ok: true as const,

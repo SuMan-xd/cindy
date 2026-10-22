@@ -39,10 +39,11 @@ import {
   buildBotGroupThreadShareCard, botGroupThreadShareOperationId, readBotGroupThreadShareCard,
   type BotGroupThreadShareView, type BotGroupThreadSummary, type BotGroupThreadUnread,
   type BotGroupDetail, type BotGroupSpeaker, type BotGroupPlanView, type BotGroupFailure, type BotGroupMessageView, type BotGroupAttachment, type ChatServerApi,
+  type BotGroupErrorCode,
   botGroupQuoteAttachmentName, botGroupQuoteExcerpt, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupQuote, readBotGroupQuoteCard, type BotGroupQuoteView,
   readBotGroupTaskCard, botGroupMessageSummaryText,
 } from '../../shared/botGroupChat.js';
-import type { BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
+import type { BotGroupBotPostInput, BotGroupBotPostResult, BotGroupChatService, BotGroupChatServiceDeps, BotGroupLaneTerminal, BotGroupTaskPostInput, BotGroupTaskPostResult } from './botGroupChatService.js';
 import { readPersistedReplyText } from './botGroupChatService.js';
 import { botGroupRuntimeFailureCode, botGroupRuntimeFailureDetail } from './botGroupRuntimeFailure.js';
 import { botGroupExecutionFailureBatches } from '@cindy/maker-shared/botGroupPresentation';
@@ -290,9 +291,11 @@ export function withChatServer(local: BotGroupChatService, deps: BotGroupChatSer
   return {
     get chatServer() { return service().chatServer; },
     listGroups: (...args) => service().listGroups(...args),
+    botGroupListForTool: (...args) => service().botGroupListForTool(...args),
     getGroup: (...args) => service().getGroup(...args),
     createGroup: (...args) => service().createGroup(...args),
     sendMessage: (...args) => service().sendMessage(...args),
+    postBotGroupMessage: (...args) => service().postBotGroupMessage(...args),
     updateGroup: (...args) => service().updateGroup(...args),
     setMembers: (...args) => service().setMembers(...args),
     deleteGroup: (...args) => service().deleteGroup(...args),
@@ -2495,21 +2498,76 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   // A lost controller ACK must not consume the phone upload or submit the same message twice.
   const pendingSends = new Map<string, ReturnType<BotGroupChatService['sendMessage']>>();
   const sendReceipts = new Map<string, Awaited<ReturnType<BotGroupChatService['sendMessage']>>>();
+  /** This account's rooms, the same list the sidebar reads. */
+  const ownerRooms = async (): Promise<BotGroupDetail[]> => {
+    await ensureRegistered(); await syncPersonalList(); beginUpgrade();
+    const groups: BotGroupDetail[] = [];
+    let after: string | undefined;
+    do {
+      const page = await api<Array<Room & { state: string; head?: unknown }>>(`/conversations?limit=100${after ? `&after=${after}` : ''}`);
+      // Only group rooms belong in the group list.
+      const joined = page.filter(r => r.state === 'joined' && isGroupRoom(r) && !personalList.hidden(r.id));
+      groups.push(...settledValues(await settleBounded(joined, SUMMARY_CONCURRENCY, room => summary(room))));
+      after = page.length === 100 ? page.at(-1)!.id : undefined;
+    } while (after);
+    return groups.filter(group => !personalList.hidden(group.id));
+  };
   return {
     chatServer,
-    listGroups: () => safe(async () => {
-      await ensureRegistered(); await syncPersonalList(); beginUpgrade();
-      const groups: BotGroupDetail[] = [];
-      let after: string | undefined;
-      do {
-        const page = await api<Array<Room & { state: string; head?: unknown }>>(`/conversations?limit=100${after ? `&after=${after}` : ''}`);
-        // Only group rooms belong in the group list.
-        const joined = page.filter(r => r.state === 'joined' && isGroupRoom(r) && !personalList.hidden(r.id));
-        groups.push(...settledValues(await settleBounded(joined, SUMMARY_CONCURRENCY, room => summary(room))));
-        after = page.length === 100 ? page.at(-1)!.id : undefined;
-      } while (after);
-      return { ok: true as const, groups: groups.filter(group => !personalList.hidden(group.id)) };
-    }),
+    listGroups: () => safe(async () => ({ ok: true as const, groups: await ownerRooms() })),
+    /** A teammate's own view of the groups: this account's rooms plus local groups not upgraded yet. */
+    botGroupListForTool: () => safe(async () => ({
+      ok: true as const,
+      // A local group that already has a receipt is the same group; only the pending ones are extra.
+      groups: [...await ownerRooms(), ...await localSources().catch(() => [])],
+    })),
+    /** Never the owner's message: the room's own members check and the Bot actor both apply. */
+    postBotGroupMessage: async (input: BotGroupBotPostInput): Promise<BotGroupBotPostResult> => {
+      const refused = (errorCode: BotGroupErrorCode, message: string): BotGroupBotPostResult => ({ ok: false, errorCode, message });
+      try {
+        if (!current()) return refused('NOT_FOUND', '群聊不存在');
+        // An old local-only group still owns its history; its messages stay in the local lane.
+        const roomId = await taskRoomFor(input.groupId);
+        if (!roomId) return local.postBotGroupMessage(input);
+        await register();
+        const actor = actors.find(a => a.kind === 'bot' && a.externalId === input.botId);
+        if (!actor) return refused('PERMISSION_DENIED', '当前伙伴不在这个群里');
+        // A room that is not a group (or not this account's) answers as a missing group.
+        const s = await groupSnapshot(roomId).catch(error => {
+          if (error instanceof Error && error.message === 'NOT_A_GROUP') return null;
+          throw error;
+        });
+        if (!s) return refused('NOT_FOUND', '群聊不存在');
+        if (s.room.dissolved_at) return refused('GROUP_DISSOLVED', '群聊已解散');
+        if (s.room.archived) return refused('GROUP_ARCHIVED', '群聊已归档');
+        if (!s.members.some(m => m.id === actor.id && m.state === 'joined')) return refused('PERMISSION_DENIED', '当前伙伴不在这个群里');
+        // Names come from the text only; departed, non-Bot and self references are dropped.
+        const candidates = s.members.filter(m => m.state === 'joined' && m.kind === 'bot' && m.id !== actor.id)
+          .map(m => ({ botId: m.id, name: m.name, displayName: memberName(m), nickname: m.nickname }));
+        const resolved = resolveBotGroupMessageMentions(input.text, { members: candidates, excludeBotIds: [actor.id] });
+        const mentions = [...new Set(resolved.all ? [...candidates.map(candidate => candidate.botId), ...resolved.botIds] : resolved.botIds)]
+          .slice(0, BOT_GROUP_MENTION_LIMIT);
+        const body = { operationId: input.clientId, content: [{ type: 'text', text: input.text }] };
+        let posted: { id: string };
+        let mentionsDropped = false;
+        try {
+          posted = await api<{ id: string }>(`/conversations/${roomId}/messages`, 'POST', { ...body, mentions }, actor.id);
+        } catch (error) {
+          // A name that left between reading the members and posting, or a server that refuses the
+          // field outright: the message still belongs in the group, so it goes without the names.
+          if (!mentions.length || !(error instanceof ChatResponseError) || ![400, 409].includes(error.status)) throw error;
+          deps.log?.warn('Chat group message mentions refused', { groupId: roomId, ...chatErrorDiagnostic(error) });
+          posted = await api<{ id: string }>(`/conversations/${roomId}/messages`, 'POST', body, actor.id);
+          mentionsDropped = true;
+        }
+        changed(roomId);
+        // The caller's ids, not the room's actor ids: a teammate reads its group's members as botIds.
+        return { ok: true, messageId: posted.id, mentionedBotIds: mentionsDropped ? [] : mentions.map(id => localBot(id)?.id ?? id) };
+      } catch (error) {
+        deps.log?.warn('Chat group message post failed', { groupId: input.groupId, ...chatErrorDiagnostic(error) });
+        return refused('CHAT_UNAVAILABLE', '群消息发送失败，请稍后重试');
+      }
+    },
     getGroup: (roomId, options) => safe(async () => {
       const target = await resolveGroup(id.parse(roomId)); await syncPersonalList();
       if (personalList.hidden(target)) throw new Error('CONVERSATION_NOT_FOUND');

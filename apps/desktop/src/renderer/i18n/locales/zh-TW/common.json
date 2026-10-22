@@ -16943,7 +16943,18 @@
     "privateUnavailable": "目前夥伴的私聊無法使用，請稍後重試。",
     "idempotencyConflict": "此重試識別碼已用於另一則訊息。",
     "privateUnconfirmed": "尚未確認私訊送達，請使用相同的重試識別碼重試。",
-    "verificationUnavailable": "暫時無法核驗群聊授權，請在連線恢復後重試。"
+    "verificationUnavailable": "暫時無法核驗群聊授權，請在連線恢復後重試。",
+    "botSessionRequired": "這次呼叫不屬於任何夥伴任務。",
+    "groupLaneNotAllowed": "只有夥伴主任務能使用群組工具；群 lane 請直接在這個群組回覆。",
+    "groupServiceUnavailable": "群聊服務尚未就緒，請稍後重試。",
+    "invalidGroupId": "需要群聊識別碼。",
+    "emptyMessage": "訊息不能為空。",
+    "messageTooLong": "訊息過長，最多 {{max}} 字。",
+    "groupNotFound": "群聊不存在，或目前帳號看不到它。",
+    "groupArchived": "群聊已封存。",
+    "groupDissolved": "群聊已解散。",
+    "notAMember": "目前夥伴不在這個群組裡。",
+    "botUnavailable": "目前夥伴已暫停或封存。"
   },
   "codexResets": {
     "retryReset": "重試重置",

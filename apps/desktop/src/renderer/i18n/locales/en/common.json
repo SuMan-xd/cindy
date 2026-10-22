@@ -16997,7 +16997,18 @@
     "privateUnavailable": "This teammate’s private chat is unavailable. Please try again later.",
     "idempotencyConflict": "This retry identifier was already used for a different message.",
     "privateUnconfirmed": "Private message delivery is unconfirmed. Retry with the same identifier.",
-    "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers."
+    "verificationUnavailable": "Group authorization could not be verified. Try again when the connection recovers.",
+    "botSessionRequired": "This call is not bound to a teammate task.",
+    "groupLaneNotAllowed": "Only the teammate's main task can use group tools. Answer a group lane directly in that group.",
+    "groupServiceUnavailable": "Group chat is not ready. Please try again later.",
+    "invalidGroupId": "A group identifier is required.",
+    "emptyMessage": "The message cannot be empty.",
+    "messageTooLong": "The message is too long (at most {{max}} characters).",
+    "groupNotFound": "That group does not exist or is not visible to this account.",
+    "groupArchived": "That group is archived.",
+    "groupDissolved": "That group has been dissolved.",
+    "notAMember": "This teammate is not a member of that group.",
+    "botUnavailable": "This teammate is paused or archived."
   },
   "codexResets": {
     "retryReset": "Retry Reset",

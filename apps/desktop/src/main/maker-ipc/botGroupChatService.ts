@@ -2101,6 +2101,44 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
     return sent;
   };
 
+  /**
+   * A teammate's own message into one of its groups, outside any turn: never the owner's
+   * identity, never another Bot's (bot-group-chat.md §10). The text is the only source of
+   * names, resolved with the same rules the composer uses, and it wakes nobody: a local
+   * group answers a user request, not a Bot's own message (§4.2).
+   */
+  const postBotGroupMessage = async (input: BotGroupBotPostInput): Promise<BotGroupBotPostResult> => {
+    const groupId = readId(input.groupId);
+    if (!groupId || !readId(input.clientId)) return failure('INVALID_PARAMS', '参数无效');
+    const text = input.text.trim();
+    if (!text) return failure('INVALID_PARAMS', '消息不能为空');
+    if (Array.from(text).length > BOT_GROUP_MESSAGE_MAX_CHARS) return failure('INVALID_PARAMS', '消息过长');
+    const scope = captureScope();
+    return serialize(groupId, async () => {
+      if (!scopeIsCurrent(scope)) return failure('NOT_FOUND', '群聊不存在');
+      const group = await readGroup(groupId);
+      if (!group) return failure('NOT_FOUND', '群聊不存在');
+      const members = await readMembers(groupId);
+      const self = members.find((member) => member.botId === input.botId);
+      if (!self) return failure('PERMISSION_DENIED', '当前伙伴不在这个群里');
+      if (self.status !== 'active') return failure('MEMBER_UNAVAILABLE', '当前伙伴已暂停或归档');
+      const mentions = resolveGroupMentions(text, null, members, { excludeBotIds: [input.botId] });
+      let appended: { id: string; sequence: number; created: boolean };
+      try {
+        appended = await appendMessage({ groupId, kind: 'message', authorKind: 'bot', authorBotId: input.botId,
+          authorName: self.name, content: text, mentions, clientId: input.clientId });
+      } catch (error) {
+        return txFailure(error);
+      }
+      emit(groupId, 'messages', scope);
+      // `@所有人` is expanded here: the reader learns who the message named, not a broadcast flag.
+      const mentionedBotIds = mentions.all
+        ? [...new Set([...members.filter((member) => member.botId !== input.botId).map((member) => member.botId), ...mentions.botIds])]
+        : mentions.botIds;
+      return { ok: true, messageId: appended.id, mentionedBotIds } as const;
+    });
+  };
+
   const continueRound = async (groupIdInput: unknown): Promise<BotGroupMutationResult> => {
     const groupId = readId(groupIdInput);
     if (!groupId) return failure('INVALID_PARAMS', 'groupId 无效');
@@ -2161,12 +2199,15 @@ export function createBotGroupChatService(deps: BotGroupChatServiceDeps) {
 
   return {
     listGroups,
+    /** Local groups are the whole list here; a Chat Server host adds its rooms. */
+    botGroupListForTool: listGroups,
     getGroup,
     createGroup,
     updateGroup,
     setMembers,
     deleteGroup,
     sendMessage,
+    postBotGroupMessage,
     continueRound,
     stopRound,
     startPlan: (input: unknown) => planAction('start', input),
@@ -2196,6 +2237,20 @@ export interface BotGroupTaskPostInput {
   /** A task started in a Thread reports back into that Thread. */
   threadRootId?: string;
 }
+/**
+ * A teammate's own message into one of its groups (bot-group-chat.md §10): posted outside any
+ * turn, as that Bot, and never as its owner. `clientId` makes one message one write.
+ */
+export interface BotGroupBotPostInput {
+  groupId: string;
+  botId: string;
+  text: string;
+  clientId: string;
+}
+/** `mentionedBotIds` are the ids the message actually names, in the same space `botId` uses. */
+export type BotGroupBotPostResult =
+  | { ok: true; messageId: string; mentionedBotIds: string[] }
+  | BotGroupFailure;
 export type BotGroupTaskPostResult =
   | { ok: true; messageId: string }
   | { ok: false; errorCode: string; retryable: boolean };

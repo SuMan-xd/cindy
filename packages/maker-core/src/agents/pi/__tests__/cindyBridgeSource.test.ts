@@ -2350,6 +2350,8 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       : name.startsWith('routine_') ? { id: 'routine-1' }
       : name === 'start_session_task' ? { instruction: 'Prepare a report' }
       : name === 'send_to_agent' ? { target_id: 'd'.repeat(80) + '::' + 'b'.repeat(128), message: 'Please review' }
+      : name === 'list_groups' ? { limit: 20 }
+      : name === 'send_group_message' ? { group_id: 'room-1', text: '@小满 帮我看下', idempotency_key: 'retry-1234' }
       : name === 'create_teammate' ? { name: 'Writer', description: 'Novelist', identity_source: 'Write stories', welcome_message: 'Hello' }
       : name === 'message_session_task' ? { task_id: 'task-1', message: 'Add a summary' }
       : { task_id: 'task-1' };
@@ -2373,6 +2375,12 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
       expect(tool.description).toContain('Follow up with message_session_task on the same task');
     }
     if (name === 'send_to_agent') expect(tool.parameters.properties.target_id.maxLength).toBe(210);
+    // Speaking in a group is bounded by the group's own 8000-character message limit.
+    if (name === 'send_group_message') {
+      expect(tool.parameters.properties.text.maxLength).toBe(8000);
+      expect(tool.parameters.required).toEqual(['group_id', 'text']);
+      expect(tool.description).toContain('never as your owner');
+    }
     const resolved = gateway.resolveDirectHelperTool(name, args);
     expect(resolved.qualifiedName).toBe('mcp__cindy_helper__' + name);
     expect(resolved.args).toEqual(args); // Permission review retains the actual operation and arguments.

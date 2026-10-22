@@ -16943,7 +16943,18 @@
     "privateUnavailable": "이 파트너의 개인 채팅을 사용할 수 없습니다. 나중에 다시 시도해 주세요.",
     "idempotencyConflict": "이 재시도 식별자는 다른 메시지에 이미 사용되었습니다.",
     "privateUnconfirmed": "개인 메시지 전달이 확인되지 않았습니다. 같은 식별자로 다시 시도해 주세요.",
-    "verificationUnavailable": "그룹 권한을 확인할 수 없습니다. 연결이 복구되면 다시 시도하세요."
+    "verificationUnavailable": "그룹 권한을 확인할 수 없습니다. 연결이 복구되면 다시 시도하세요.",
+    "botSessionRequired": "이 호출은 파트너 작업에 연결되어 있지 않습니다.",
+    "groupLaneNotAllowed": "파트너의 메인 작업만 그룹 도구를 사용할 수 있습니다. 그룹 레인에서는 해당 그룹에서 직접 답하세요.",
+    "groupServiceUnavailable": "그룹 채팅이 준비되지 않았습니다. 나중에 다시 시도해 주세요.",
+    "invalidGroupId": "그룹 식별자가 필요합니다.",
+    "emptyMessage": "메시지는 비워 둘 수 없습니다.",
+    "messageTooLong": "메시지가 너무 깁니다(최대 {{max}}자).",
+    "groupNotFound": "그룹이 없거나 이 계정에서 볼 수 없습니다.",
+    "groupArchived": "그룹이 보관 처리되었습니다.",
+    "groupDissolved": "그룹이 해산되었습니다.",
+    "notAMember": "이 파트너는 해당 그룹의 멤버가 아닙니다.",
+    "botUnavailable": "이 파트너는 일시중지 또는 보관 상태입니다."
   },
   "codexResets": {
     "retryReset": "초기화 다시 시도",

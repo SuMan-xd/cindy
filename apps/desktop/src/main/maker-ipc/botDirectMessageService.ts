@@ -156,6 +156,14 @@ async function failed(
   };
 }
 
+/**
+ * The Bot that owns one Session, read from the same link the DM service uses. Never a lookup of
+ * another Bot: a caller can only ever act as the Session it was dispatched into.
+ */
+export async function loadBotCallerSession(sessionId: string) {
+  return loadCaller(sessionId);
+}
+
 async function loadCaller(sessionId: string) {
   const db = getDbClient().drizzle;
   const [caller] = await db

@@ -16943,7 +16943,18 @@
     "privateUnavailable": "このパートナーの個別チャットを利用できません。後でもう一度お試しください。",
     "idempotencyConflict": "この再試行識別子は別のメッセージに使用されています。",
     "privateUnconfirmed": "個別メッセージの配信は未確認です。同じ識別子で再試行してください。",
-    "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。"
+    "verificationUnavailable": "グループの権限を確認できませんでした。接続が回復してから再試行してください。",
+    "botSessionRequired": "この呼び出しはパートナーのタスクに紐づいていません。",
+    "groupLaneNotAllowed": "グループツールを使えるのはパートナーのメインタスクだけです。グループのレーンではそのグループで直接返信してください。",
+    "groupServiceUnavailable": "グループチャットの準備ができていません。後でもう一度お試しください。",
+    "invalidGroupId": "グループ ID が必要です。",
+    "emptyMessage": "メッセージを空にすることはできません。",
+    "messageTooLong": "メッセージが長すぎます（最大 {{max}} 文字）。",
+    "groupNotFound": "グループが存在しないか、このアカウントからは見えません。",
+    "groupArchived": "グループはアーカイブされています。",
+    "groupDissolved": "グループは解散済みです。",
+    "notAMember": "このパートナーはそのグループのメンバーではありません。",
+    "botUnavailable": "このパートナーは一時停止中かアーカイブ済みです。"
   },
   "codexResets": {
     "retryReset": "リセットを再試行",

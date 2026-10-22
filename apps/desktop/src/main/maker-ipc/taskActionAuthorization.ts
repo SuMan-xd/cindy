@@ -9,6 +9,8 @@ type Decision = Awaited<ReturnType<ToolCallAuthorizer>>;
 /** These names describe effects, not tool visibility or an Agent permission mode. */
 export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'send_to_agent',
+  // Speaking in a group cannot be recalled, and it reaches people outside this task.
+  'send_group_message',
   'continue_workbench_task',
   'set_workbench_task_responsibility',
   'send_to_session',
