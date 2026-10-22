@@ -1657,6 +1657,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           botId: bot.id, mode: execution.access_mode,
           sourceGroup: { groupId: s.room.id, name: s.room.name },
           isCurrent: () => current() && running.get(execution.id) === run && !run.settlement,
+          // Room participants a lane may not message are still real; list_agents reports
+          // them instead of letting a cross-owner companion look nonexistent.
+          peers: async () => (await api<Member[]>(`/conversations/${s.room.id}/members`))
+            .filter(member => member.kind === 'bot' && member.state === 'joined')
+            .map(member => ({ actorId: member.id, botId: localBot(member.id)?.id ?? member.id,
+              name: memberName(member), owned: member.ownerActorId === selfId })),
           validate: async () => {
             // Recheck metadata and the execution lease at the actual tool boundary.
             // Group administrators cannot grant access to someone else's companion.
@@ -1833,6 +1839,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         ...(run.plan && !talk ? ['Earlier step artifacts, including those produced on another computer, come as attachments. Copy needed files into your working directory before editing.'] : []),
         ...(!run.plan || talk ? ['If you have nothing useful to add, reply with exactly NO_REPLY.'] : []),
         'Keep your reply concise. Your final response will be posted to the group. Do not call another participant just to reply.',
+        'From a group you can only message your own account\'s companions that run on this computer. A participant owned by someone else, or running on another computer, cannot be messaged here, and typing @name in your reply does not notify it: say in your reply that it is needed and let the owner address it in the group.',
       ].join('\n');
       await updateExecution(run, 'heartbeat');
       if (!current() || running.get(execution.id) !== run) throw new Error('STALE_EXECUTOR');

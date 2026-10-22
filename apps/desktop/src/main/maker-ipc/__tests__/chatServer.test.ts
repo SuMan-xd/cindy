@@ -1748,6 +1748,37 @@ describe('Chat Server result delivery and refresh', () => {
       }
     });
 
+  it('projects live room companions, including other owners, from the execution grant', async () => {
+    const foreignBot = '20000000-0000-4000-8000-000000000002';
+    const otherDeviceBot = '20000000-0000-4000-8000-000000000003';
+    fixture.handle.mockImplementation((route, method, body) => {
+      if (route === '/executions/claim') {
+        const next = claimed ? null : { ...execution, requester_id: selfId, access_mode: 'owner' };
+        claimed = true; return { body: { execution: next } };
+      }
+      if (route.endsWith('/members')) return { body: [
+        { id: botId, kind: 'bot', name: 'Mine', ownerActorId: selfId, ownerName: 'Me', state: 'joined',
+          accessRevision: 1, guestAccess: 'tools', displayName: 'Mine', nickname: null, avatar: null },
+        { id: foreignBot, kind: 'bot', name: 'Theirs', ownerActorId: 'other-owner', ownerName: 'Yang', state: 'joined',
+          accessRevision: 1, guestAccess: 'none', displayName: 'Theirs', nickname: null, avatar: null },
+        { id: otherDeviceBot, kind: 'bot', name: 'Elsewhere', ownerActorId: selfId, ownerName: 'Me', state: 'joined',
+          accessRevision: 1, guestAccess: 'none', displayName: 'Elsewhere', nickname: null, avatar: null },
+        { id: selfId, kind: 'human', name: 'Me', ownerActorId: selfId, ownerName: 'Me', state: 'joined', role: 'owner',
+          accessRevision: 1, guestAccess: 'tools', displayName: 'Me', nickname: null, avatar: null },
+      ] };
+      return response(route);
+    });
+    await start();
+    await expect(authorizeGroupTool('lane', 'local-bot', 'owner-action')).resolves.toBeDefined();
+    const grant = await authorizeGroupTool('lane', 'local-bot', 'owner-action');
+    // Only Bot companions are peers; the human owner is not an address for list_agents.
+    await expect(grant.peers()).resolves.toEqual([
+      { actorId: botId, botId: 'local-bot', name: 'Mine (Me)', owned: true },
+      { actorId: foreignBot, botId: foreignBot, name: 'Theirs (Yang)', owned: false },
+      { actorId: otherDeviceBot, botId: otherDeviceBot, name: 'Elsewhere (Me)', owned: true },
+    ]);
+  });
+
   it('keeps server plan steps in a grant-specific chat-only lane without opening a project', async () => {
     fixture.profiles = [{ id: 'local-bot', displayName: 'Bot', avatar: null, status: 'active' }];
     const planId = '70000000-0000-4000-8000-000000000001';

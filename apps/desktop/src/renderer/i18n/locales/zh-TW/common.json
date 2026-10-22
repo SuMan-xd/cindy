@@ -16938,6 +16938,7 @@
   "groupTools": {
     "authorizationRequired": "群組授權已失效或不允許此操作，請由夥伴主人在目前群組重新發起。",
     "localPeersOnly": "群組內的私訊只能傳送給本機同帳號夥伴。",
+    "groupPeerNotReachable": "這位夥伴屬於群組裡的其他人或另一台電腦，群組內不能私訊它；請直接在群組裡 @ 它。",
     "ownerChanged": "帳號已切換，請重試。",
     "invalidMessage": "訊息或重試識別碼無效。",
     "privateUnavailable": "目前夥伴的私聊無法使用，請稍後重試。",

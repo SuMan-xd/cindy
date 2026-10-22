@@ -16938,6 +16938,7 @@
   "groupTools": {
     "authorizationRequired": "群内授权已失效或不允许此操作，请由伙伴主人在当前群重新发起。",
     "localPeersOnly": "群内私聊只能发送给本机同账号伙伴。",
+    "groupPeerNotReachable": "这位伙伴属于群里的其他人或另一台电脑，群内不能私聊它；请直接在群里 @ 它。",
     "ownerChanged": "账号已经切换，请重试。",
     "invalidMessage": "消息或重试标识无效。",
     "privateUnavailable": "当前伙伴私聊不可用，请稍后重试。",

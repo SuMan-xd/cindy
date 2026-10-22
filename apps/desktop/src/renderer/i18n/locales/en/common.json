@@ -16992,6 +16992,7 @@
   "groupTools": {
     "authorizationRequired": "Group authorization has expired or does not allow this action. Ask the teammate owner to make a new request in this group.",
     "localPeersOnly": "Group messages can only target teammates on this device and account.",
+    "groupPeerNotReachable": "This companion belongs to someone else in the group or runs on another computer, so a group cannot message it privately. Address it in the group instead.",
     "ownerChanged": "The account changed. Please try again.",
     "invalidMessage": "The message or retry identifier is invalid.",
     "privateUnavailable": "This teammate’s private chat is unavailable. Please try again later.",

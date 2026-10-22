@@ -264,6 +264,73 @@ describe('botDirectMessageService', () => {
     } finally { release(); }
   });
 
+  it('reports a cross-owner group participant as unreachable instead of omitting it', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const peers = vi.fn(async () => [
+      { actorId: 'actor-a', botId: 'bot-a', name: '总控 (苏曼)', owned: true },
+      { actorId: 'actor-b', botId: 'bot-b', name: 'Dash Bot', owned: true },
+      { actorId: 'remote-actor', botId: 'remote-actor', name: '杨垒垒的Cindy (杨垒垒)', owned: false },
+      { actorId: 'other-device', botId: 'cindy-default', name: 'Cindy (苏曼)', owned: true },
+    ]);
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner',
+      sourceGroup: { groupId: 'group-1', name: 'Design' }, isCurrent: () => true, validate: async () => {}, peers });
+    // A group lane never consults the account directory; device-link must not be needed here.
+    const list = vi.fn(async () => ({ agents: [{ id: 'remote::bot-x', name: 'Elsewhere', deviceId: 'remote', deviceName: 'Studio' }], unavailableDevices: [] }));
+    const service = createBotDirectMessageService({ dispatch, transport: { selfDeviceId: () => 'local', list,
+      verifySender: async () => true, resolve: async id => ({ id, name: 'x' }), send: async () => ({ ok: false, errorCode: 'unused', message: 'unused' }),
+      readReceipt: async () => ({ messageId: '', accepted: null }) } });
+    try {
+      const result = await service.listAgents('a-group');
+      expect(result).toMatchObject({ ok: true, scope: 'group', remoteDirectoryQueried: false, unavailableDevices: [],
+        group: { groupId: 'group-1', name: 'Design' } });
+      expect(list).not.toHaveBeenCalled();
+      // Local roster stays addressable; the caller is never listed as a peer.
+      expect(result).toMatchObject({ agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) });
+      expect((result as { agents: Array<{ id: string }> }).agents.map(row => row.id)).not.toContain('bot-a');
+      expect(peers).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ groupPeers: [
+        { id: 'remote-actor', name: '杨垒垒的Cindy (杨垒垒)', reachable: false, reason: 'CROSS_OWNER' },
+        { id: 'cindy-default', name: 'Cindy (苏曼)', reachable: false, reason: 'OTHER_DEVICE' },
+      ] });
+    } finally { release(); }
+  });
+
+  it('keeps an authorized group roster readable when the room membership read fails', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => {}, peers: async () => { throw new Error('NETWORK'); } });
+    try {
+      expect(await createBotDirectMessageService({ dispatch }).listAgents('a-group')).toMatchObject({ ok: true, scope: 'group', groupPeers: [],
+        agents: expect.arrayContaining([{ id: 'bot-b', name: 'Dash Bot', local: true }]) });
+    } finally { release(); }
+  });
+
+  it('refuses to send to a cross-owner group participant with a specific code', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => {}, peers: async () => [{ actorId: 'remote-actor', botId: 'remote-actor', name: '杨垒垒的Cindy', owned: false }] });
+    const svc = createBotDirectMessageService({ dispatch });
+    try {
+      expect(await svc.messageAgent({ callerSessionId: 'a-group', targetBotId: 'remote-actor', message: '返修单给你' }))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_PEER_NOT_REACHABLE' });
+      // A remote address keeps the documented group boundary unchanged.
+      expect(await svc.messageAgent({ callerSessionId: 'a-group', targetBotId: 'local::bot-b', message: 'Fixture only' }))
+        .toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(sqlite.prepare('SELECT COUNT(*) AS n FROM bot_direct_messages').get()).toEqual({ n: 0 });
+    } finally { release(); }
+  });
+
+  it('never turns a revoked lease into a complete group roster', async () => {
+    sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
+    const release = registerGroupToolAuthority('a-group', { botId: 'bot-a', mode: 'owner', isCurrent: () => true,
+      validate: async () => {}, peers: async () => { throw new GroupToolAuthorizationError(); } });
+    try {
+      expect(await createBotDirectMessageService({ dispatch }).listAgents('a-group'))
+        .toMatchObject({ ok: false, errorCode: 'GROUP_AUTHORIZATION_REQUIRED' });
+    } finally { release(); }
+  });
+
   it.each(['valid', 'server-revoked', 'execution-ended'] as const)('uses the host cancellation adapter when a queued group DM drains: %s', async condition => {
     sqlite.exec("INSERT INTO sessions VALUES ('a-group','bot','active'); INSERT INTO bot_session_links VALUES ('a-group-link','bot-a','a-group','group',NULL)");
     let draining = false;
@@ -479,7 +546,7 @@ describe('botDirectMessageService', () => {
     await new Promise<void>(resolve => setImmediate(resolve));
     expect(list).toHaveBeenCalledOnce();
     fail(new Error('offline'));
-    expect((await Promise.all(calls)).every(result => result.ok && result.discoveryError === 'REMOTE_DIRECTORY_UNAVAILABLE')).toBe(true);
+    expect((await Promise.all(calls)).every(result => result.ok && 'discoveryError' in result && result.discoveryError === 'REMOTE_DIRECTORY_UNAVAILABLE')).toBe(true);
     start = new Promise<void>(resolve => { started = resolve; });
     const retry = service.listAgents('a-main');
     await start;

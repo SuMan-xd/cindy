@@ -4,7 +4,7 @@ import { parseBotPeerAddress, botPeerAddress, MAX_BOT_PEER_ADDRESS_CHARS } from 
 import { isCompanionShadowed } from '../companion-cloud/homes.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { withBotProfileLocks } from './botProfileLock.js';
-import { authorizeGroupTool, GroupToolAuthorizationError } from './botGroupToolAuthorization.js';
+import { authorizeGroupTool, GroupToolAuthorizationError, type GroupToolPeer } from './botGroupToolAuthorization.js';
 import { t } from '../i18n.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 
@@ -64,6 +64,25 @@ type BotDirectMessageWakeKind = Extract<DispatchResult, { ok: true }>['wakeKind'
 interface BotRosterEntry {
   id: string;
   name: string;
+}
+
+/** A room participant this lane may not message; shaped for the model, not an address. */
+export interface GroupPeerEntry {
+  id: string;
+  name: string;
+  local: false;
+  reachable: false;
+  /** `CROSS_OWNER`: another owner's companion. `OTHER_DEVICE`: this owner, another computer. */
+  reason: 'CROSS_OWNER' | 'OTHER_DEVICE';
+}
+
+/** A transport failure only degrades the extra room detail; a revoked lease still fails. */
+async function peerLookup(authority: { peers(): Promise<GroupToolPeer[]> }): Promise<GroupToolPeer[]> {
+  try { return await authority.peers(); }
+  catch (error) {
+    if (error instanceof GroupToolAuthorizationError) throw error;
+    return [];
+  }
 }
 
 export type BotDirectMessageResult =
@@ -517,6 +536,13 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     } else targetProfile = await loadTargetProfile(input.targetBotId);
     if (!ownerIsCurrent()) return failed('OWNER_CHANGED', '账号已经切换，本次伙伴消息未发送');
     if (!targetProfile) {
+      // Another owner's companion has no address on this device; say so instead of
+      // letting a group participant look like a missing teammate.
+      if (groupAuthority) {
+        const peer = (await peerLookup(groupAuthority))
+          .find(candidate => candidate.botId === input.targetBotId && !candidate.owned);
+        if (peer) return failed('GROUP_PEER_NOT_REACHABLE', t('groupTools.groupPeerNotReachable'));
+      }
       return failed('TARGET_BOT_NOT_FOUND', '找不到目标 Bot', true, groupAuthority?.refresh);
     }
     if (remoteSender && targetProfile.hiddenAt) return failed('NOT_FOUND', 'Remote teammate is unavailable');
@@ -945,7 +971,26 @@ export function createBotDirectMessageService(deps: BotDirectMessageServiceDeps)
     if (groupAuthority) {
       if (scope !== undefined && deps.isOwnerScopeCurrent && !deps.isOwnerScopeCurrent(scope))
         return { ok: false as const, errorCode: 'OWNER_CHANGED', message: t('groupTools.ownerChanged') };
-      return { ok: true as const, agents: local.map(row => ({ ...row, local: true })), unavailableDevices: [] };
+      // A group execution may only message this device's account, so the remote
+      // directory is deliberately not consulted here. Room participants from another
+      // owner or device still exist, and are reported as unreachable rather than
+      // disappearing — an empty roster must never be read as "that companion is gone".
+      const addressed = new Set(local.map(row => row.id));
+      let groupPeers: GroupPeerEntry[] = [];
+      try {
+        groupPeers = (await groupAuthority.peers())
+          .filter(peer => peer.botId !== caller.botId && !addressed.has(peer.botId))
+          .map(peer => ({ id: peer.botId, name: peer.name, local: false, reachable: false,
+            reason: peer.owned ? 'OTHER_DEVICE' as const : 'CROSS_OWNER' as const }));
+      } catch (error) {
+        // A revoked lease must still surface as an authorization failure, never as a
+        // complete roster that happens to have no room participants.
+        if (error instanceof GroupToolAuthorizationError) throw error;
+        groupPeers = [];
+      }
+      return { ok: true as const, agents: local.map(row => ({ ...row, local: true })),
+        unavailableDevices: [], scope: 'group' as const, remoteDirectoryQueried: false,
+        ...(groupAuthority.sourceGroup ? { group: groupAuthority.sourceGroup } : {}), groupPeers };
     }
     let remote: Awaited<ReturnType<BotMessageTransport['list']>> = { agents: [], unavailableDevices: [] };
     let discoveryError: string | undefined;
